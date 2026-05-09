@@ -1,0 +1,4 @@
+tshoot promptail
+
+sudo sysctl -w fs.inotify.max_user_instances=512
+sudo sysctl -w fs.inotify.max_user_watches=524288

@@ -1,0 +1,97 @@
+# values-monitoring.yaml
+# Full monitoring stack values
+
+# ─────────────────────────────────────────
+# Grafana
+# ─────────────────────────────────────────
+grafana:
+  adminPassword: admin123
+  
+  # Enable sidecar for auto datasource discovery
+  sidecar:
+    datasources:
+      enabled: true
+    dashboards:
+      enabled: true
+
+  # Pre-configure datasources
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki:3100
+      access: proxy
+      isDefault: false
+      jsonData:
+        maxLines: 1000
+
+  # Useful dashboards to import
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: Kubernetes
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+
+  dashboards:
+    default:
+      # Kubernetes cluster overview
+      k8s-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+
+      # Pod monitoring
+      k8s-pods:
+        gnetId: 6336
+        revision: 1
+        datasource: Prometheus
+
+      # Node monitoring
+      k8s-nodes:
+        gnetId: 11074
+        revision: 9
+        datasource: Prometheus
+
+      # Loki logs dashboard
+      loki-logs:
+        gnetId: 13639
+        revision: 2
+        datasource: Loki
+
+# ─────────────────────────────────────────
+# Prometheus
+# ─────────────────────────────────────────
+prometheus:
+  prometheusSpec:
+    retention: 7d
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 512Mi
+        cpu: 500m
+
+# ─────────────────────────────────────────
+# Alertmanager
+# ─────────────────────────────────────────
+alertmanager:
+  enabled: true
+
+# ─────────────────────────────────────────
+# Node Exporter (node metrics)
+# ─────────────────────────────────────────
+nodeExporter:
+  enabled: true
+
+# ─────────────────────────────────────────
+# kube-state-metrics (pod/deployment metrics)
+# ─────────────────────────────────────────
+kubeStateMetrics:
+  enabled: true

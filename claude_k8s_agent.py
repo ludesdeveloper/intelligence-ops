@@ -132,6 +132,51 @@ def handle_mention(body, client):
     )
     log.info("✅ Done!")
 
+@app.event("message")
+def handle_message_events(body, client, logger):
+    event = body.get("event", {})
+    text = event.get("text", "")
+    channel = event.get("channel")
+    ts = event.get("ts")
+    username = event.get("username", "")
+
+    # Check attachments for Grafana alerts
+    attachments = event.get("attachments", [])
+    attachment_text = ""
+    if attachments:
+        attachment_text = attachments[0].get("title", "") + "\n" + attachments[0].get("text", "")
+
+    # Only react to Grafana FIRING alerts
+    if "[FIRING" not in attachment_text:
+        return
+
+    # Ignore own bot
+    if username == "intelligence-ops-bot":
+        return
+
+    # Ignore thread replies
+    if event.get("thread_ts") and event.get("thread_ts") != ts:
+        return
+
+    log.info(f"🚨 Grafana alert detected! {attachment_text[:100]}")
+
+    client.chat_postMessage(
+        channel=channel,
+        text="🚨 Alert detected! Investigating...",
+        thread_ts=ts
+    )
+
+    response = react_loop(
+        f"Grafana alert fired:\n{attachment_text}\n\nInvestigate and diagnose."
+    )
+
+    client.chat_postMessage(
+        channel=channel,
+        text=response[:3500],
+        thread_ts=ts
+    )
+    log.info("✅ Done!")
+
 if __name__ == "__main__":
     log.info("✅ ReAct Kubernetes Bot starting...")
     SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN")).start()

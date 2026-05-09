@@ -1,3 +1,5 @@
-archive
-venv
-.env*
+archive/
+venv/
+.env
+.env.*
+*.env

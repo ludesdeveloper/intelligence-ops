@@ -1,0 +1,37 @@
+# values-loki.yaml
+# Loki configuration for local/dev setup
+
+auth_enabled: false
+
+loki:
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  
+  # Retention
+  limits_config:
+    retention_period: 7d
+    max_query_series: 10000
+    max_entries_limit_per_query: 10000
+
+# Single binary mode (good for local/dev)
+deploymentMode: SingleBinary
+
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 200m
+
+# Disable distributed components for local
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
