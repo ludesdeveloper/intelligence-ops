@@ -32,7 +32,6 @@ monitoring-stack/
   values-monitoring.yaml       # Helm values for kube-prometheus-stack
   values-loki.yaml             # Helm values for Loki
   values-promptail.yaml        # Helm values for Promtail (empty placeholder)
-archive/                       # Earlier iterations (slack_*, k8s_agent.py, etc.)
 ```
 
 ## Setup
@@ -87,7 +86,7 @@ kubectl apply -f nginx-deployment.yaml       # healthy baseline
 - Promtail (log shipper pointed at `loki-gateway`)
 - Loki datasource pre-wired into Grafana
 
-It also raises `fs.inotify.max_user_instances` / `max_user_watches`, which Promtail needs on `kind` clusters.
+It also raises `fs.inotify.max_user_instances` / `max_user_watches`, which Promtail tends to hit on local clusters (kind, WSL2, etc.).
 
 Run it once after creating your cluster:
 
@@ -97,8 +96,37 @@ Run it once after creating your cluster:
 
 Grafana defaults: `admin` / `admin123` on `localhost:3000` after `kubectl port-forward`.
 
+## Troubleshooting
+
+### Promtail pods stuck in `CrashLoopBackOff` / `Error`
+
+Symptom: Promtail logs show errors like `too many open files` or `inotify_init1: too many open files`.
+
+Cause: the host's inotify limits are too low. Common on `kind` and WSL2.
+
+Fix — bump the limits on the host (not the container):
+
+```
+sudo sysctl -w fs.inotify.max_user_instances=512
+sudo sysctl -w fs.inotify.max_user_watches=524288
+```
+
+Make it persist across reboots:
+
+```
+echo 'fs.inotify.max_user_instances=512' | sudo tee -a /etc/sysctl.conf
+echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
+```
+
+Then restart the Promtail pods:
+
+```
+kubectl rollout restart daemonset/promtail -n monitoring
+```
+
+`install_monitoring.sh` already applies and persists these values, so you only need this if you skipped that script or are running on a fresh host.
+
 ## Notes
 
 - The bot truncates Slack replies to 3500 chars.
 - `kubectl` calls have a 10-second timeout; Claude calls have 60 seconds.
-- The `archive/` directory contains earlier prototypes (static-tool, dynamic-tool, skill-based variants) kept for reference.
