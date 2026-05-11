@@ -115,7 +115,17 @@ kind create cluster
 kubectl get nodes
 ```
 
-### 3. Install observability stack
+### 3. Deploy sample applications
+
+```bash
+# Deploy healthy nginx app
+kubectl apply -f nginx-deployment.yaml
+
+# Verify
+kubectl get pods -n default
+```
+
+### 4. Install observability stack
 
 ```bash
 # Add helm repos
@@ -159,15 +169,48 @@ helm install promtail grafana/promtail \
   --wait
 ```
 
-### 4. Setup Python environment
+See `monitoring-stack/` folder for additional monitoring configurations.
+
+### 5. Setup alert rules
+
+Apply CrashLoopBackOff alert rule via Grafana UI or kubectl:
+
+```bash
+# Via kubectl
+kubectl apply -f - << YAML
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: crashloop-alert
+  namespace: monitoring
+  labels:
+    app: kube-prometheus-stack
+    release: monitoring
+spec:
+  groups:
+  - name: kubernetes.pods
+    rules:
+    - alert: PodCrashLooping
+      expr: |
+        kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} == 1
+      for: 0m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Pod {{ \$labels.pod }} is crash looping"
+        description: "Pod {{ \$labels.pod }} in namespace {{ \$labels.namespace }} is in CrashLoopBackOff state."
+YAML
+```
+
+### 6. Setup Python environment
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install slack-bolt python-dotenv
+pip install -r requirements.txt
 ```
 
-### 5. Setup Slack
+### 7. Setup Slack
 
 - Create a Slack app at https://api.slack.com/apps
 - Add Bot Token Scopes: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`
@@ -175,7 +218,7 @@ pip install slack-bolt python-dotenv
 - Subscribe to events: `app_mention`, `message.channels`
 - Install app to workspace
 
-### 6. Configure environment
+### 8. Configure environment
 
 ```bash
 cp .env.example .env
@@ -188,13 +231,7 @@ SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 ```
 
-### 7. Setup alert rules
-
-```bash
-kubectl apply -f alert-rules/crashloop-alert.yaml
-```
-
-### 8. Configure Grafana → Slack notification
+### 9. Configure Grafana → Slack notification
 
 - Open Grafana: `kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80`
 - Go to Alerting → Contact Points → Add Slack contact point
@@ -233,10 +270,7 @@ Mention the bot in Slack:
 Deploy a crashloop pod to trigger the full automated flow:
 
 ```bash
-kubectl run crashloop-demo \
-  --image=busybox \
-  --restart=Always \
-  -- sh -c "echo 'crashing' && exit 1"
+kubectl apply -f crashloop-deployment.yaml
 ```
 
 Within 1-2 minutes:
@@ -249,7 +283,7 @@ Within 1-2 minutes:
 Cleanup:
 
 ```bash
-kubectl delete pod crashloop-demo
+kubectl delete -f crashloop-deployment.yaml
 ```
 
 ---
@@ -258,11 +292,14 @@ kubectl delete pod crashloop-demo
 
 ```
 intelligence-ops/
-├── claude_k8s_agent.py      # Main agent
-├── alert-rules/
-│   └── crashloop-alert.yaml # Prometheus alert rules
-├── .env.example             # Environment template
-├── requirements.txt         # Python dependencies
+├── claude_k8s_agent.py           # Main agent - ReAct loop + Slack handlers
+├── kubernetes-tools/             # Kubernetes utilities and helper scripts
+├── monitoring-stack/             # Monitoring stack additional configurations
+├── crashloop-deployment.yaml     # Sample crashloop deployment for testing
+├── nginx-deployment.yaml         # Sample healthy nginx deployment
+├── requirements.txt              # Python dependencies
+├── .env.example                  # Environment variables template
+├── .gitignore
 └── README.md
 ```
 
@@ -315,6 +352,28 @@ attachment_text = attachments[0].get("title", "") + attachments[0].get("text", "
 - Claude Enterprise policy may block bash tool execution — this is by design. The ReAct pattern was specifically chosen to work within enterprise constraints.
 - Claude CLI must be authenticated and available in PATH
 - Grafana alert to Slack requires incoming webhook or bot token configured as contact point
+
+---
+
+## Blog Series
+
+Full journey documented in Bahasa Indonesia:
+
+| Part | Title |
+|------|-------|
+| [Part 1](https://ludesdeveloper.wordpress.com/2026/05/11/intelligence-ops-part-1-latar-belakang-kenapa-ai-dan-building-block/) | Latar Belakang, Kenapa AI dan Building Block |
+| Part 2 | Reveal Tools *(coming soon)* |
+| Part 3 | Setup Environment *(coming soon)* |
+| Part 4 | Setup Slack *(coming soon)* |
+| Part 5 | Observability Stack *(coming soon)* |
+| Part 6 | ReAct Agent *(coming soon)* |
+| Part 7 | Demo + Lessons Learned *(coming soon)* |
+
+---
+
+## License
+
+MIT License — feel free to use, modify, and distribute.
 
 ---
 
