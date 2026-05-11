@@ -1,132 +1,321 @@
-# k8s-agent
+# Intelligence Ops 🤖
 
-A Slack bot that diagnoses Kubernetes cluster issues using Claude as the reasoning engine. The bot listens for Slack mentions and Grafana firing alerts, then runs a ReAct loop where Claude decides which `kubectl` commands to execute, observes the output, and produces a diagnosis.
+> AI-powered Kubernetes monitoring agent that automatically investigates cluster issues and delivers diagnosis to Slack using ReAct pattern.
 
-## How it works
+---
 
-`claude_k8s_agent.py` is the main service. It uses [`slack_bolt`](https://slack.dev/bolt-python/) Socket Mode to receive events and invokes the local `claude` CLI as a subprocess to plan investigations.
+## Overview
 
-The ReAct loop (`react_loop`) prompts Claude to respond with one of two JSON actions:
+Intelligence Ops is an autonomous SRE agent that bridges the gap between traditional monitoring tools and intelligent incident response. When an issue occurs in your Kubernetes cluster, Intelligence Ops automatically:
 
-- `{"action": "kubectl", "cmd": "..."}` — Python runs `kubectl <cmd>` and feeds the output back into the conversation
-- `{"action": "answer", "text": "..."}` — final diagnosis returned to Slack
+1. **Detects** anomalies via Prometheus alert rules
+2. **Receives** alerts through Slack (via Grafana)
+3. **Investigates** the cluster dynamically using ReAct pattern
+4. **Delivers** a complete diagnosis back to Slack — in seconds
 
-It iterates up to 5 times before giving up.
+No more manual `kubectl` hunting. No more context switching. Just answers.
 
-Two Slack triggers are wired up:
+---
 
-- `app_mention` — direct user questions (`@bot why is pod X crashing?`)
-- `message` — Grafana alerts (only acts when an attachment contains `[FIRING`, ignores its own messages and thread replies)
+## Architecture
 
-## Layout
+```mermaid
+flowchart TD
+    A[Kubernetes Cluster] -->|metrics| B[Prometheus]
+    A -->|logs| C[Promtail]
+    C -->|push logs| D[Loki]
+    B -->|evaluate rules| E[Grafana]
+    E -->|FIRING alert| F[Slack Channel]
+    F -->|detect attachment| G[claude_k8s_agent.py]
+    G -->|ReAct loop| H{Claude AI}
+    H -->|decide command| G
+    G -->|execute| I[kubectl]
+    I -->|output| G
+    H -->|final answer| G
+    G -->|post diagnosis| F
 
-```
-claude_k8s_agent.py            # Main Slack bot + ReAct loop
-crashloop-deployment.yaml      # Test workload that intentionally crashes
-nginx-deployment.yaml          # Test workload (healthy nginx)
-requirements.txt               # Python deps
-kubernetes-tools/
-  generate_readonly_kubeconfig.sh  # Creates a read-only ServiceAccount + kubeconfig
-monitoring-stack/
-  install_monitoring.sh        # One-shot installer: kube-prometheus-stack + Loki + Promtail
-  values-monitoring.yaml       # Helm values for kube-prometheus-stack
-  values-loki.yaml             # Helm values for Loki
-  values-promptail.yaml        # Helm values for Promtail (empty placeholder)
-```
-
-## Setup
-
-1. Install Python dependencies:
-   ```
-   python -m venv venv && source venv/bin/activate
-   pip install -r requirements.txt
-   ```
-2. Install the `claude` CLI and authenticate it — the bot shells out to it via `subprocess`.
-3. Make sure `kubectl` is on PATH and points at the cluster you want to diagnose. Optionally use the read-only kubeconfig (see below).
-4. Create a `.env` with:
-   ```
-   SLACK_BOT_TOKEN=xoxb-...
-   SLACK_APP_TOKEN=xapp-...
-   ```
-   The Slack app needs Socket Mode enabled and the `app_mention` + `message.channels` event subscriptions.
-
-## Run
-
-```
-python claude_k8s_agent.py
+    style H fill:#7c3aed,color:#fff
+    style G fill:#1a0a2e,color:#c4b5fd
+    style F fill:#4a154b,color:#fff
 ```
 
-Then mention the bot in a Slack channel:
+---
 
-```
-@bot any pods crashlooping?
-```
+## ReAct Pattern
 
-Or post a Grafana alert into a channel the bot is in — it auto-investigates anything containing `[FIRING`.
+The core of Intelligence Ops is the **ReAct (Reasoning + Acting)** pattern — a 2022 research concept where AI iteratively thinks, acts, and observes until it has enough information to answer.
 
-## Test workloads
+```mermaid
+sequenceDiagram
+    participant S as Slack
+    participant A as Agent (Python)
+    participant C as Claude AI
+    participant K as kubectl
 
-Apply one of the demo manifests to give the bot something to find:
-
-```
-kubectl apply -f crashloop-deployment.yaml   # intentional crashloop
-kubectl apply -f nginx-deployment.yaml       # healthy baseline
-```
-
-## Read-only kubectl access
-
-`kubernetes-tools/generate_readonly_kubeconfig.sh` provisions a `readonly-agent` ServiceAccount with `get/list/watch` on common resources and writes `~/.kube/readonly-config`. Point the agent at this kubeconfig (`KUBECONFIG=~/.kube/readonly-config`) so it can't accidentally mutate the cluster.
-
-## Monitoring stack
-
-`monitoring-stack/install_monitoring.sh` installs a full local observability stack via Helm:
-
-- kube-prometheus-stack (Prometheus, Grafana, Alertmanager, node-exporter, kube-state-metrics)
-- Loki (single-binary, filesystem storage)
-- Promtail (log shipper pointed at `loki-gateway`)
-- Loki datasource pre-wired into Grafana
-
-It also raises `fs.inotify.max_user_instances` / `max_user_watches`, which Promtail tends to hit on local clusters (kind, WSL2, etc.).
-
-Run it once after creating your cluster:
-
-```
-./monitoring-stack/install_monitoring.sh
+    S->>A: [FIRING] CrashLoopBackOff detected
+    A->>C: "Investigate this alert"
+    C->>A: {"action": "kubectl", "cmd": "get pods -A"}
+    A->>K: kubectl get pods -A
+    K->>A: pod-x CrashLoopBackOff 5 restarts
+    A->>C: "Output: pod-x crashing. What next?"
+    C->>A: {"action": "kubectl", "cmd": "logs pod-x -n default"}
+    A->>K: kubectl logs pod-x -n default
+    K->>A: OOMKilled
+    A->>C: "Output: OOMKilled. What next?"
+    C->>A: {"action": "answer", "text": "Pod is OOMKilled..."}
+    A->>S: Post diagnosis in thread
 ```
 
-Grafana defaults: `admin` / `admin123` on `localhost:3000` after `kubectl port-forward`.
+**Claude decides** what to investigate. **Python executes** the commands. Enterprise policies that block AI from running bash directly are bypassed elegantly — Claude only reasons, Python acts.
 
-## Troubleshooting
+---
 
-### Promtail pods stuck in `CrashLoopBackOff` / `Error`
+## Building Blocks
 
-Symptom: Promtail logs show errors like `too many open files` or `inotify_init1: too many open files`.
+| Component | Role | Tools Used |
+|-----------|------|-----------|
+| Container Orchestration | Where your apps run | Kubernetes (Kind for local) |
+| Observability Stack | Detect anomalies | Prometheus + Grafana + Loki + Promtail |
+| Communication Channel | Alert + response interface | Slack |
+| AI / LLM | Reasoning and diagnosis | Claude (via CLI) |
+| Agent Orchestrator | Glue everything together | Python (`claude_k8s_agent.py`) |
 
-Cause: the host's inotify limits are too low. Common on `kind` and WSL2.
+> The building block approach means you can swap any component. Using Teams instead of Slack? GPT-4 instead of Claude? The system adapts.
 
-Fix — bump the limits on the host (not the container):
+---
 
+## Prerequisites
+
+- Docker
+- [Kind](https://kind.sigs.k8s.io/) or any Kubernetes cluster
+- kubectl
+- [Claude CLI](https://claude.ai/code) (logged in)
+- Python 3.8+
+- Helm 3+
+- Slack workspace with admin access
+
+---
+
+## Installation
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/ludesdeveloper/intelligence-ops.git
+cd intelligence-ops
 ```
+
+### 2. Setup Kubernetes cluster (local)
+
+```bash
+# Create cluster
+kind create cluster
+
+# Verify
+kubectl get nodes
+```
+
+### 3. Install observability stack
+
+```bash
+# Add helm repos
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+
+# Create namespace
+kubectl create namespace monitoring
+
+# Install Prometheus + Grafana + Alertmanager
+helm install monitoring prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --set grafana.adminPassword=admin123 \
+  --set grafana.sidecar.datasources.enabled=true \
+  --set alertmanager.enabled=true \
+  --wait
+
+# Fix inotify limits (required for Promtail on Kind)
 sudo sysctl -w fs.inotify.max_user_instances=512
 sudo sysctl -w fs.inotify.max_user_watches=524288
+
+# Install Loki
+helm install loki grafana/loki \
+  --namespace monitoring \
+  --set deploymentMode=SingleBinary \
+  --set loki.auth_enabled=false \
+  --set loki.commonConfig.replication_factor=1 \
+  --set loki.storage.type=filesystem \
+  --set singleBinary.replicas=1 \
+  --set read.replicas=0 \
+  --set write.replicas=0 \
+  --set backend.replicas=0 \
+  --set loki.useTestSchema=true \
+  --wait
+
+# Install Promtail
+helm install promtail grafana/promtail \
+  --namespace monitoring \
+  --set config.lokiAddress=http://loki-gateway.monitoring.svc.cluster.local:80/loki/api/v1/push \
+  --wait
 ```
 
-Make it persist across reboots:
+### 4. Setup Python environment
 
-```
-echo 'fs.inotify.max_user_instances=512' | sudo tee -a /etc/sysctl.conf
-echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.conf
-```
-
-Then restart the Promtail pods:
-
-```
-kubectl rollout restart daemonset/promtail -n monitoring
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install slack-bolt python-dotenv
 ```
 
-`install_monitoring.sh` already applies and persists these values, so you only need this if you skipped that script or are running on a fresh host.
+### 5. Setup Slack
 
-## Notes
+- Create a Slack app at https://api.slack.com/apps
+- Add Bot Token Scopes: `app_mentions:read`, `channels:history`, `channels:read`, `chat:write`
+- Enable Socket Mode and generate App Token
+- Subscribe to events: `app_mention`, `message.channels`
+- Install app to workspace
 
-- The bot truncates Slack replies to 3500 chars.
-- `kubectl` calls have a 10-second timeout; Claude calls have 60 seconds.
+### 6. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+```
+
+### 7. Setup alert rules
+
+```bash
+kubectl apply -f alert-rules/crashloop-alert.yaml
+```
+
+### 8. Configure Grafana → Slack notification
+
+- Open Grafana: `kubectl port-forward -n monitoring svc/monitoring-grafana 3000:80`
+- Go to Alerting → Contact Points → Add Slack contact point
+- Set recipient and bot token
+- Set notification policy to use Slack contact point
+
+---
+
+## Usage
+
+### Start the agent
+
+```bash
+source venv/bin/activate
+python3 claude_k8s_agent.py
+```
+
+```
+✅ claude_k8s_agent.py starting...
+👂 Listening: manual mention + Grafana alerts
+⚡️ Bolt app is running!
+```
+
+### Manual investigation
+
+Mention the bot in Slack:
+
+```
+@intelligence-ops-bot check my cluster
+@intelligence-ops-bot why is my pod crashing?
+@intelligence-ops-bot check resource usage in production namespace
+```
+
+### Automatic investigation
+
+Deploy a crashloop pod to trigger the full automated flow:
+
+```bash
+kubectl run crashloop-demo \
+  --image=busybox \
+  --restart=Always \
+  -- sh -c "echo 'crashing' && exit 1"
+```
+
+Within 1-2 minutes:
+1. Prometheus detects CrashLoopBackOff
+2. Grafana fires alert to Slack
+3. Agent detects `[FIRING` in Slack message attachments
+4. ReAct loop investigates cluster
+5. Claude posts diagnosis in Slack thread
+
+Cleanup:
+
+```bash
+kubectl delete pod crashloop-demo
+```
+
+---
+
+## Project Structure
+
+```
+intelligence-ops/
+├── claude_k8s_agent.py      # Main agent
+├── alert-rules/
+│   └── crashloop-alert.yaml # Prometheus alert rules
+├── .env.example             # Environment template
+├── requirements.txt         # Python dependencies
+└── README.md
+```
+
+---
+
+## How It Works
+
+### Two Triggers
+
+**Trigger 1: Manual Mention**
+```
+User: @intelligence-ops-bot check pods
+         ↓
+app_mention event
+         ↓
+ReAct loop
+         ↓
+Diagnosis in thread
+```
+
+**Trigger 2: Grafana Alert**
+```
+Grafana fires alert → Slack
+         ↓
+Agent detects [FIRING in attachments
+(not in text field — Grafana sends alerts in attachments!)
+         ↓
+ReAct loop
+         ↓
+Diagnosis in thread
+```
+
+### Why Attachments, Not Text?
+
+Grafana sends alerts with an empty `text` field. The actual alert content is in the `attachments` array. This is a common gotcha when integrating Grafana with Slack bots.
+
+```python
+# Wrong - always empty from Grafana
+text = event.get("text", "")
+
+# Correct
+attachments = event.get("attachments", [])
+attachment_text = attachments[0].get("title", "") + attachments[0].get("text", "")
+```
+
+---
+
+## Known Limitations
+
+- Claude Enterprise policy may block bash tool execution — this is by design. The ReAct pattern was specifically chosen to work within enterprise constraints.
+- Claude CLI must be authenticated and available in PATH
+- Grafana alert to Slack requires incoming webhook or bot token configured as contact point
+
+---
+
+*Built with frustration, curiosity, and too many CrashLoopBackOffs.* 😄
